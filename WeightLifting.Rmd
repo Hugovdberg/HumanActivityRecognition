@@ -1,0 +1,231 @@
+---
+title: "Predicting Weight Lifting Activities"
+author: "Hugo van den Berg"
+date: "15 oktober 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE)
+```
+
+```{r load_libraries, message=FALSE}
+library(magrittr) # v1.5
+library(readr) # v1.0.0
+library(tidyr) # v0.6.0
+library(dplyr) # v0.5.0
+
+library(caret) # v6.0-71
+
+library(ggplot2) #v2.1.0
+```
+
+```{r get_data}
+# Local data files
+train.file <- 'data/pml-training.csv'
+valid.file <- 'data/pml-testing.csv'
+
+# Get the data if not yet downloaded
+if (!dir.exists('data/')) {
+    dir.create('data/')
+}
+if (!file.exists(train.file)) {
+    info("Download training set")
+    train.url = 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv'
+    download.file(url = train.url, destfile = train.file)
+    rm(train.url)
+}
+if (!file.exists(valid.file)) {
+    info("Download testing set")
+    test.url = 'https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv'
+    download.file(url = test.url, destfile = valid.file)
+    rm(test.url)
+}
+```
+
+```{r import_data, warning=FALSE}
+# Import the datafiles
+# Set datatypes of the different columns for faster import
+col_types <- paste0('_ciicci',
+                    paste0(rep("d", 152), collapse = ""),
+                    collapse = "")
+train.data <- read_csv(train.file,
+                       progress = FALSE,
+                       na = c('', 'NA', '#DIV/0!'),
+                       col_types = paste0(col_types, "c", collapse = ""))
+valid.data <- read_csv(valid.file,
+                       progress = FALSE,
+                       na = c('', 'NA', '#DIV/0!'),
+                       col_types = paste0(col_types, "i", collapse = ""))
+```
+
+```{r clean_data}
+# Convert some datatypes
+train.data %<>%
+    mutate(
+        user_name = factor(user_name),
+        new_window = new_window == "yes",
+        classe = factor(classe)
+    )# %>% sample_n(3000)
+valid.data %<>%
+    mutate(
+        user_name = factor(user_name),
+        new_window = new_window == "yes"
+    )
+
+# Split predictors and outcome
+train.classe <- train.data$classe
+train.data %<>% select(-classe)
+valid.id <- valid.data$problem_id
+valid.data %<>% select(-problem_id)
+
+# Remove mostly empty variables
+missing <- sapply(train.data, function(x){mean(is.na(x))})
+train.data <- train.data[,missing < 0.95] %>%
+    select(-num_window, -cvtd_timestamp)
+valid.data <- valid.data[,missing < 0.95] %>%
+    select(-num_window, -cvtd_timestamp)
+```
+
+```{r split_test}
+# Split data to training and testing data, so we can use the original testing
+# set as validation set
+set.seed(2016-10-14)
+
+intrain <- createDataPartition(train.classe, p = 0.65, list = FALSE)
+test.data <- train.data[-intrain,]
+test.classe <- train.classe[-intrain]
+train.data <- train.data[intrain,]
+train.classe <- train.classe[intrain]
+```
+
+```{r preProcess}
+prepObj <- preProcess(train.data,
+                      method = c("nzv", "pca"),
+                      thresh = .9)
+train.data %<>% predict(prepObj, .)
+test.data %<>% predict(prepObj, .)
+valid.data %<>% predict(prepObj, .)
+```
+
+```{r trainModel}
+fit <- train(y = train.classe, x = train.data, method = "rf")
+```
+
+```{r accuracy}
+train.conf <- confusionMatrix(predict(fit), train.classe)
+test.conf <- confusionMatrix(predict(fit, test.data), test.classe)
+```
+
+## Executive Summary {#summary}
+
+Using the [weightlifting dataset][1] I attempt to distill a model to predict
+weight lifting excercises from the measurements of a number of sensors on a
+weight lifter's body and equipment.
+The activities in the training dataset are labelled with the correct class of
+excercise, the testing dataset is validated externally using a quiz on the
+[Coursera website][2].
+
+Using a random forest model the classes could be predicted with
+`r round(test.conf$overall['Accuracy']*100, 2)`% accuracy (95% confidence
+interval: `r round(test.conf$overall['AccuracyLower']*100, 2)`% -
+`r round(test.conf$overall['AccuracyUpper']*100, 2)`%)
+
+## Getting the data {#getting_data}
+
+The data was provided on the [Coursera website][2], as a subset of the original
+[dataset][2].
+For performance reasons these data are downloaded only once.
+On the website the validation set is called `testing`, but to explicitly test
+out of bag error we later create a testing set from the training set.
+
+```{r get_data, echo=TRUE, eval=FALSE}
+```
+
+The data are loaded using the `readr` package which performs best with
+specified column types.
+These types are equal for both files, except for the last column, which
+contains the excersise class in the training set and the problem id in the
+validation set.
+```{r import_data, echo=TRUE, eval=FALSE}
+```
+
+## Clean up {#cleaning}
+
+Some variables in the dataset should be considered as factors, or as logicals,
+these are converted here.
+Also the `classe` and `problem_id` variables are split from the training and
+validation dataset, respectively to make them structured equally.
+
+The data also contains `r sum(missing >= 0.95)` columns with more than 95% `NA`.
+These variables are removed since they don't contribute much information.
+
+```{r clean_data, echo=TRUE, eval=FALSE}
+```
+
+## Splitting and preprocessing the data {#prep}
+
+The training dataset is split into a real training set (65%) and a testing set
+to evaluate out of bag error.
+This split is applied to both the predictors and the outcomes.
+
+```{r split_test, echo=TRUE, eval=FALSE}
+```
+
+Next the variables are removed which have no significant variance, and from the
+remaining variables the principal components are extracted that can explain
+90% of the variance in the training set (after splitting).
+
+```{r preProcess, echo=TRUE, eval=FALSE}
+```
+
+## Training {#training}
+
+The model trained is a random forest model, optimized for prediction accuracy.
+
+```{r trainModel, echo=TRUE, eval=FALSE}
+```
+
+On the training dataset this model achieves
+`r round(train.conf$overall['Accuracy']*100, 2)`% accuracy, while on the
+testing set the accuracy is `r round(test.conf$overall['Accuracy']*100, 2)`%
+(with a 95% confidence interval
+`r round(test.conf$overall['AccuracyLower']*100, 2)`% -
+`r round(test.conf$overall['AccuracyUpper']*100, 2)`%).
+See also the confusion matrix of the predictions on the test dataset:
+
+
+```{r}
+test.conf
+```
+
+## References {#references}
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H.
+**[Qualitative Activity Recognition of Weight Lifting Exercises][1]**.
+*Proceedings of 4th International Conference in Cooperation with SIGCHI
+(Augmented Human '13)*. Stuttgart, Germany: ACM SIGCHI, 2013.
+
+## Appendices {#appendices}
+
+### Libraries {#libraries}
+
+The libraries used for this analysis are listed below.
+
+```{r load_libraries, echo=TRUE, eval=FALSE}
+```
+
+### Quiz predictions
+
+The predictions for the 20 quiz problems are listed in the following table.
+
+```{r quiz_answers}
+quiz_answers <- data.frame(problem_id = valid.id,
+                           classe = predict(fit, valid.data))
+knitr::kable(quiz_answers)
+```
+
+
+
+[1]: http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201 "Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013."
+[2]: https://www.coursera.org/learn/practical-machine-learning "Practical Machine Learning (Johns Hopkins University), part of the Data Science Specialization"
